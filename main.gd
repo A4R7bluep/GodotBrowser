@@ -147,3 +147,5 @@ func parser(tokens):
 	var file = FileAccess.open("res://parser.json", FileAccess.WRITE)
 	file.store_string(str(tokenDict))
 	file.close()
+
+	print("test")
