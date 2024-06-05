@@ -7,9 +7,21 @@ var TESTING = true
 @onready var search = $HBoxContainer/LineEdit
 @onready var go = $HBoxContainer/Button
 
+
+class Element:
+	var value = {"element_type": "", "attributes": [], "text_value": null}
+	var children = []
+	
+	func _init(type, attributes, innertext):
+		value["element_type"] = type #Example: p
+		value["attributes"] = attributes #Exapmle: id="h"
+		value["text_value"] = innertext #Example: This is text
+
+
 func _ready():
-	http.request("https://godotengine.org")
-	search.text = "https://godotengine.org"
+	var url = "https://godotengine.org"
+	http.request(url)
+	search.text = url
 
 func _on_http_request_request_completed(result, response_code, headers, body):
 	var html = body.get_string_from_utf8()
@@ -33,6 +45,13 @@ func make_tree(path):
 	path.reverse()
 	return tree
 
+func dict_to_array(dict):
+	var array = []
+	for key in dict:
+		array.append(key)
+		array.append(dict_to_array(dict[key]))
+	return array
+
 func merge_dict(dict1, dict2):
 	for key in dict1.keys():
 		var val = dict1[key]
@@ -40,7 +59,10 @@ func merge_dict(dict1, dict2):
 			if key in dict2 and type_string(typeof(dict2[key])) == "Dictionary":
 				merge_dict(dict1[key], dict2[key])
 		else:
-			if key in dict2:
+			if key in dict2 and key in dict1 and not type_string(typeof(dict1[key])) == "Array":
+				dict1[key].append(dict2[key])
+				print("WACK")
+			elif key in dict2:
 				dict1[key] = dict2[key]
 
 	for key in dict2.keys():
@@ -130,11 +152,8 @@ func parser(tokens):
 		var token = tokens[i]
 		match token:
 			"<":
-				#if not tokens[i + 2] in ["</", "/>"]:
 				pathList.append(tokens[i + 1])
 				tokenDict = merge_dict(tokenDict, make_tree(pathList))
-				#tokenDict.merge(make_tree(pathList), true)
-				#print(str(pathList))
 			">":
 				if pathList.back() in ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]:
 					pathList.pop_back()
