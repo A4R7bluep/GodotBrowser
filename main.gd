@@ -1,168 +1,277 @@
 extends Control
 
-var TESTING = true
+const TESTING = true
 
 @onready var http = $HTTPRequest
 @onready var label = $RichTextLabel
 @onready var search = $HBoxContainer/LineEdit
 @onready var go = $HBoxContainer/Button
 
-
-class Element:
-	var value = {"element_type": "", "attributes": [], "text_value": null}
-	var children = []
+class TagToken:
+	var tagName = ""
+	var type = "OpenTag"
+	var attributes = {}
+	var tempAttrName = ""
+	var selfClosing = false
 	
-	func _init(type, attributes, innertext):
-		value["element_type"] = type #Example: p
-		value["attributes"] = attributes #Exapmle: id="h"
-		value["text_value"] = innertext #Example: This is text
+	func _to_string():
+		return str({"name": tagName, "type": type})
 
+
+# ==============================================================================
+# Tokenizer States
+# ==============================================================================
+
+enum {
+	DATA,
+	TAG_OPEN, 
+	CHAR_REF,
+	MARKUP_DECLARATION_OPEN,
+	END_TAG_OPEN,
+	TAG_NAME, 
+	BOGUS_COMMENT,
+	BEFORE_ATTRIBUTE_NAME,
+	SELF_CLOSING_START_TAG,
+	AFTER_ATTRIBUTE_NAME,
+	ATTRIBUTE_NAME,
+	ATTRIBUTE_VALUE,
+}
+
+
+# ==============================================================================
+# Tree Builder States
+# ==============================================================================
+
+enum {
+	INITIAL,
+	BEFORE_HTML,
+}
+
+
+# ==============================================================================
+# Ready Functions
+# ==============================================================================
 
 func _ready():
-	var url = "https://godotengine.org"
-	http.request(url)
-	search.text = url
+	#var url = "https://godotengine.org"
+	#http.request(url)
+	#search.text = url
+	var tokenizer = Tokenizer.new()
+	var markup = "<div>Divitis is a serious condition.</div>"
+	var tokens = tokenizer.tokenizer_states(markup)
+	print(tokens)
 
-func _on_http_request_request_completed(result, response_code, headers, body):
-	var html = body.get_string_from_utf8()
-	label.text = html
-	parser(tokenizer(html))
-	if TESTING:
-		get_tree().quit()
+#func _on_http_request_request_completed(result, response_code, headers, body):
+	#var html = body.get_string_from_utf8()
+	#label.text = html
+	#parser(tokenizer(html))
+	#if TESTING:
+		#get_tree().quit()
 
-func _on_button_pressed():
-	http.request(search.text)
+#func _on_button_pressed():
+	#http.request(search.text)
 
-func _on_line_edit_text_submitted(new_text):
-	http.request(new_text)
-
-
-func make_tree(path):
-	var tree = {}
-	path.reverse()
-	for node in path:
-		tree = {node: tree}
-	path.reverse()
-	return tree
-
-func dict_to_array(dict):
-	var array = []
-	for key in dict:
-		array.append(key)
-		array.append(dict_to_array(dict[key]))
-	return array
-
-func merge_dict(dict1, dict2):
-	for key in dict1.keys():
-		var val = dict1[key]
-		if type_string(typeof(val)) == "Dictionary":
-			if key in dict2 and type_string(typeof(dict2[key])) == "Dictionary":
-				merge_dict(dict1[key], dict2[key])
-		else:
-			if key in dict2 and key in dict1 and not type_string(typeof(dict1[key])) == "Array":
-				dict1[key].append(dict2[key])
-				print("WACK")
-			elif key in dict2:
-				dict1[key] = dict2[key]
-
-	for key in dict2.keys():
-		var val = dict2[key]
-		if not key in dict1:
-			dict1[key] = val
-
-	return dict1
+#func _on_line_edit_text_submitted(new_text):
+	#http.request(new_text)
 
 
-func tokenizer(html):
-	var tokenList = []
-	var inNameToken = false
-	var inPropToken = false
-	var body = html
-	var bodypart1
-	var bodypart2
-	
-	body = body.split("</head>")[1]
-	body = body.split("</html>")[0]
-	body = body.strip_edges()
-	
-	# Remove Style Tag
-	bodypart1 = body.split("<style>")[0]
-	bodypart2 = body.split("<style>")[1].split("</style>")[1]
-	var css = body.split("<style>")[1].split("</style>")[0]
-	bodypart1.strip_edges()
-	bodypart2.strip_edges()
-	body = bodypart1 + bodypart2
-	
-	# Remove Script Tag
-	bodypart1 = body.split("<script>")[0]
-	bodypart2 = body.split("<script>")[1].split("</script>")[1]
-	var js = body.split("<script>")[1].split("</script>")[0]
-	bodypart1.strip_edges()
-	bodypart2.strip_edges()
-	body = bodypart1 + bodypart2
-	body += ("</script>\n</body>")
-	
-	#var file = FileAccess.open("res://body.html", FileAccess.WRITE)
-	#file.store_string(str(body))
-	#file.close()
-	
-	label.text = body
-	
-	for i in range(len(body)):
-		var char = body[i]
+# ==============================================================================
+# Parser Classes
+# ==============================================================================
+class Tokenizer:
+	var tokenizerState = DATA
+
+	var tokens = ["doctype", "\n"]
+	var token
+
+	var alpha = [
+		'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+		'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'
+	]
+
+	func tokenizer_states(html):
+		for character in html:
+			match tokenizerState:
+				DATA:
+					data_eat(character)
+				TAG_OPEN:
+					tag_open_eat(character)
+				CHAR_REF:
+					char_ref_eat(character)
+				#MARKUP_DECLARATION_OPEN:
+					#markup_decl_eat(character)
+				END_TAG_OPEN:
+					end_tag_open_eat(character)
+				TAG_NAME:
+					tag_name_eat(character)
+				BOGUS_COMMENT:
+					bogus_comment_eat(character)
+				BEFORE_ATTRIBUTE_NAME:
+					before_attribute_name_eat(character)
+				SELF_CLOSING_START_TAG:
+					self_closing_start_tag_eat(character)
+				AFTER_ATTRIBUTE_NAME:
+					after_attribute_name_eat(character)
+				ATTRIBUTE_NAME:
+					attribute_name_eat(character)
+				ATTRIBUTE_VALUE:
+					attribute_value_eat(character)
 		
-		if char + body[min(i + 1, len(body) - 1)] == "</": 
-			tokenList.append("</")
-			inNameToken = false
-		elif char + body[min(i + 1, len(body) - 1)] == "/>":
-			tokenList.append("/>")
-			inNameToken = false
-		elif char == "<":
-			tokenList.append("<")
-			inNameToken = false
-		elif char == ">":
-			tokenList.append(">")
-			inNameToken = false
-		elif char == " " and inNameToken:
-			inNameToken = false
-			inPropToken = true
-		else:
-			if !inNameToken and char != "/":
-				inNameToken = true
-				tokenList.append(char)
-			elif inNameToken:
-				tokenList[-1] += char
-	
-	#var file = FileAccess.open("res://tokenizer.json", FileAccess.WRITE)
-	#file.store_string(JSON.stringify(tokenList))
-	#file.close()
-	
-	return tokenList
+		return tokens
 
 
-func parser(tokens):
-	var tokenDict = {}
-	var pathList = []
-	var jumpNext = false
-	
-	for i in range(len(tokens)):
-		if jumpNext:
-			jumpNext = false
-			continue
-		var token = tokens[i]
-		match token:
+	# ==============================================================================
+	# Consuming Functions
+	# ==============================================================================
+
+	func data_eat(character):
+		match character:
+			"&":
+				tokenizerState = CHAR_REF
 			"<":
-				pathList.append(tokens[i + 1])
-				tokenDict = merge_dict(tokenDict, make_tree(pathList))
+				tokenizerState = TAG_OPEN
+			null:
+				parse_error("unexpected-null-character")
+				tokens.append(character)
+			_:
+				tokens.append(character)
+
+	func tag_open_eat(character):
+		if character == "!":
+			tokenizerState = MARKUP_DECLARATION_OPEN
+		elif character == "/":
+			tokenizerState = END_TAG_OPEN
+		elif character.to_upper() in alpha:
+				token = TagToken.new()
+				tokenizerState = TAG_NAME
+				tag_name_eat(character)
+		elif character == "?":
+			parse_error("unexpected-question-mark-instead-of-tag-name")
+			tokenizerState = BOGUS_COMMENT
+			bogus_comment_eat(character)
+		else:
+			parse_error("invalid-first-character-of-tag-name")
+			tokens.append("<")
+			tokenizerState = DATA
+			data_eat(character)
+
+	func char_ref_eat(character):
+		pass # Come back to at https://htmlparser.info/parser/#character-references
+
+	func end_tag_open_eat(character):
+		if character.to_upper() in alpha:
+			token = TagToken.new()
+			token.type = "CloseTag"
+			tokenizerState = TAG_NAME
+			tag_name_eat(character)
+		elif character == ">":
+			parse_error("missing-end-tag-name")
+			tokenizerState = DATA
+		else:
+			parse_error("invalid-first-character-of-tag-name")
+			bogus_comment_eat(character)
+
+	func tag_name_eat(character):
+		if character == "\t" or character == "\n" or character == " ":
+			tokenizerState = BEFORE_ATTRIBUTE_NAME
+		elif character == "/":
+			tokenizerState = SELF_CLOSING_START_TAG
+		elif character == ">":
+			tokenizerState = DATA
+			tokens.append(token)
+		elif character in alpha:
+				token.tagName += character.to_lower()
+		elif character == null:
+			parse_error('unexpected-null-character')
+		else:
+			token.tagName += character
+
+	func bogus_comment_eat(character):
+		pass
+
+	func before_attribute_name_eat(character):
+		token.tempAttrName = ""
+		match character:
+			"/", ">":
+				tokenizerState = AFTER_ATTRIBUTE_NAME
+				after_attribute_name_eat(character)
+			_:
+				tokenizerState = ATTRIBUTE_NAME
+				attribute_name_eat(character)
+
+	func after_attribute_name_eat(character):
+		match character:
+			"/":
+				tokenizerState = SELF_CLOSING_START_TAG
+
+	func self_closing_start_tag_eat(character):
+		match character:
 			">":
-				if pathList.back() in ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]:
-					pathList.pop_back()
-			"</":
-				pathList.pop_back()
-			"/>":
-				pathList.pop_back()
-	#print(tokenDict)
+				token.selfClosing = true
+				tokenizerState = DATA
+				tokens.append(token)
+			_:
+				parse_error("unexpected-solidus-in-tag")
+				tokenizerState = BEFORE_ATTRIBUTE_NAME
+				before_attribute_name_eat(character)
+
+	func attribute_name_eat(character):
+		match character:
+			"\t", " ", "/", ">":
+				tokenizerState = AFTER_ATTRIBUTE_NAME
+				token.attributes[token.tempAttrName] = ""
+				after_attribute_name_eat(character)
+			"=":
+				token.attributes[token.tempAttrName] = ""
+				tokenizerState = ATTRIBUTE_VALUE
+			_:
+				token.tempAttrName += character
+
+	func attribute_value_eat(character):
+		match character:
+			"\"", "\'":
+				pass
+			" ":
+				tokenizerState = AFTER_ATTRIBUTE_NAME
+				after_attribute_name_eat(character)
+			_:
+				token.attributes[token.tempAttrName] += character
+
+	#func markup_decl_eat(character):
+		#match character:
+			#"-":
+				#pass
 	
-	var file = FileAccess.open("res://parser.json", FileAccess.WRITE)
-	file.store_string(str(tokenDict))
-	file.close()
+	# ==============================================================================
+	# HTML Parser Error Function
+	# ==============================================================================
+	
+	func parse_error(errorType):
+		push_error("HTML PARSER ERROR OF TYPE {type}".format({"type": errorType}))
+		#print_rich("[color=red][b]HTML PARSER ERROR OF TYPE {type}[/b][/color]
+		#".format({"type": errorType}))
+
+class TreeBuilder:
+	var treeBuilderState = INITIAL
+	
+	func tree_builder_states(tokens):
+		for token in tokens:
+			match treeBuilderState:
+				INITIAL:
+					initial_eat(token)
+				BEFORE_HTML:
+					before_html_eat(token)
+	
+	# ==========================================================================
+	# Consuming Functions
+	# ==========================================================================
+	
+	func initial_eat(token):
+		treeBuilderState = BEFORE_HTML
+	
+	func before_html_eat(token):
+		if token in ["\t", "\n", " "]:
+			pass
+		else:
+			pass
+
